@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build":"",
+    "build":"pnpm run --filter=code-line build && pnpm run --filter=playground build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

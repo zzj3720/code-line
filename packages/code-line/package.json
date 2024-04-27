@@ -10,7 +10,7 @@
   },
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "default": "./dist/code-line.js",
       "types": "./src/index.ts"
     }
   },
