@@ -1,16 +1,13 @@
 import Parser from "web-tree-sitter";
 import {CompositeDisposable, Disposable} from "./Disposable.ts";
+import {Widget} from "./widget/Widget.ts";
+import {Emitter} from "./Emitter.ts";
 
-type Complete = {
-    offsetStart?: number;
-    offsetEnd?: number;
-    text: string;
-}
 type LineEditorOptions = {
     source?: string
     language: Parser.Language
     highlight?: string;
-    onCreate?: (selection: Selection, node: Parser.SyntaxNode) => void
+    widgets?: Widget[]
 };
 export type Selection = {
     start: number,
@@ -19,18 +16,28 @@ export type Selection = {
 
 export class CodeLine implements Disposable {
     private disposables = new CompositeDisposable();
+    private widgets = new Set<Widget>();
     private parser!: Parser;
-    private tree!: Parser.Tree;
-    private source: string;
-    private selection?: Selection
-    private readonly highlightQuery?: Parser.Query;
-    private readonly language: Parser.Language;
-    private readonly codeArea = document.createElement('div');
-    private readonly errorArea = document.createElement('div');
-    private readonly completeArea = document.createElement('div');
-    onCreate?: (selection: Selection, node: Parser.SyntaxNode) => void;
+    private _tree!: Parser.Tree;
+    public get tree() {
+        return this._tree;
+    }
 
-    private constructor(private ele: HTMLElement, ops: LineEditorOptions) {
+    private set tree(value: Parser.Tree) {
+        this._tree = value;
+    }
+
+    private source: string;
+    private _selection?: Selection
+    private readonly highlightQuery?: Parser.Query;
+    public readonly language: Parser.Language;
+    private readonly codeArea = document.createElement('div');
+    events = {
+        beforeChange: new Emitter<void>(),
+        afterChange: new Emitter<void>()
+    }
+
+    private constructor(public root: HTMLElement, ops: LineEditorOptions) {
         this.source = ops.source ?? '';
         this.language = ops.language;
         try {
@@ -38,7 +45,7 @@ export class CodeLine implements Disposable {
         } catch (e) {
             console.error(e)
         }
-        this.onCreate = ops.onCreate;
+        this.widgets = new Set(ops.widgets ?? []);
     }
 
     dispose() {
@@ -52,24 +59,16 @@ export class CodeLine implements Disposable {
     }
 
     private initRoot() {
-        this.ele.style.position = 'relative';
-        this.ele.style.fontFamily = 'monospace';
-        this.ele.style.whiteSpace = 'pre';
+        this.root.style.position = 'relative';
+        this.root.style.fontFamily = 'monospace';
+        this.root.style.whiteSpace = 'pre';
     }
 
-    private initCoreArea() {
+    private initCodeArea() {
         this.codeArea.contentEditable = 'true';
         this.codeArea.style.outline = 'none'
         this.codeArea.spellcheck = false;
-        this.ele.appendChild(this.codeArea);
-    }
-
-    private initErrorArea() {
-        this.ele.appendChild(this.errorArea);
-    }
-
-    private initCompleteArea() {
-        this.ele.appendChild(this.completeArea);
+        this.root.appendChild(this.codeArea);
     }
 
     async init() {
@@ -78,14 +77,12 @@ export class CodeLine implements Disposable {
         this.parser.setLanguage(this.language);
 
         this.initRoot();
-        this.initCoreArea();
-        this.initErrorArea();
-        this.initCompleteArea();
-
+        this.initCodeArea();
         this.listenInput();
         this.listenSelectionChange();
 
         this.sourceChange(this.source);
+        this.widgets.forEach(v => v.init(this));
     }
 
 
@@ -93,16 +90,16 @@ export class CodeLine implements Disposable {
         const listener = () => {
             this.sourceChange(this.codeArea.innerText);
         };
-        this.ele.addEventListener('input', listener)
+        this.root.addEventListener('input', listener)
         this.disposables.add(() => {
-            this.ele.removeEventListener('input', listener)
+            this.root.removeEventListener('input', listener)
         })
     }
 
     listenSelectionChange() {
-        document.addEventListener('selectionchange', this.selectionChange)
+        document.addEventListener('selectionchange', this.fromSelectionChange)
         this.disposables.add(() => {
-            document.removeEventListener('selectionchange', this.selectionChange)
+            document.removeEventListener('selectionchange', this.fromSelectionChange)
         })
     }
 
@@ -117,7 +114,7 @@ export class CodeLine implements Disposable {
         }
     }
 
-    private selectionChange = () => {
+    private fromSelectionChange = () => {
         const selection = window.getSelection();
         if (selection?.rangeCount) {
             const range = selection.getRangeAt(0);
@@ -127,7 +124,7 @@ export class CodeLine implements Disposable {
             }
             const startOffset = getOffset(range.startContainer);
             const endOffset = getOffset(range.endContainer);
-            this.selection = {
+            this._selection = {
                 start: startOffset + range.startOffset,
                 end: endOffset + range.endOffset
             }
@@ -160,8 +157,12 @@ export class CodeLine implements Disposable {
         }
     }
 
-    setSelection(start: number, end: number) {
-        this.selection = {
+    public get selection() {
+        return this._selection;
+    }
+
+    public setSelection(start: number, end: number) {
+        this._selection = {
             start,
             end
         }
@@ -173,6 +174,7 @@ export class CodeLine implements Disposable {
         newEnd: number,
         oldEnd: number
     }) {
+        this.events.beforeChange.emit();
         this.source = newText;
         if (change) {
             this.tree = this.tree.edit({
@@ -233,17 +235,6 @@ export class CodeLine implements Disposable {
         return [...map.entries()].sort(([a], [b]) => a.startIndex - b.startIndex)
     }
 
-    getError = (node: Parser.SyntaxNode): Parser.SyntaxNode[] => {
-        const result: Parser.SyntaxNode[] = []
-        if (node.isError) {
-            result.push(node)
-        }
-        if (node.hasError) {
-            result.push(...node.children.flatMap(this.getError))
-        }
-        return result;
-    }
-
     renderTree() {
         const highlight = this.getHighlight();
         const result: {
@@ -280,7 +271,7 @@ export class CodeLine implements Disposable {
                 offset: index,
             })
         }
-        this.selectionChange();
+        this.fromSelectionChange();
         this.codeArea.innerHTML = '';
         for (const {names, text, offset} of result) {
             const node = document.createElement('span');
@@ -291,53 +282,7 @@ export class CodeLine implements Disposable {
             this.codeArea.appendChild(node)
         }
         this.restoreSelection();
-        const errors = this.getError(this.tree.rootNode);
-        this.errorArea.innerHTML = '';
-        for (const error of errors) {
-            const range = this.selectionToRange(error.startIndex, error.endIndex);
-            if (range) {
-                for (const rect of range.getClientRects()) {
-                    const div = document.createElement('div');
-                    div.style.position = 'absolute';
-                    div.style.left = `${rect.left}px`;
-                    div.style.top = `${rect.top + rect.height - 1}px`;
-                    div.style.width = `${rect.width}px`;
-                    div.style.height = `1px`;
-                    div.style.backgroundColor = 'red';
-                    this.errorArea.appendChild(div);
-                }
-            }
-        }
-        this.closeComplete();
-        if (this.selection && this.selection.start === this.selection.end) {
-            const node = this.findSyntaxNode(this.selection.start);
-            if (node) {
-                this.onCreate?.(this.selection, node)
-            }
-        }
-    }
-
-    openComplete(start: number, end: number, list: Complete[]) {
-        for (const item of list) {
-            const div = document.createElement('div');
-            div.innerText = item.text;
-            div.style.cursor = 'pointer';
-            div.style.padding = '4px';
-            div.style.border = '1px solid #ccc';
-            div.style.borderRadius = '4px';
-            div.style.margin = '4px';
-            div.addEventListener('click', () => {
-                const realStart = start + (item.offsetStart ?? 0);
-                const realEnd = end + (item.offsetEnd ?? 0);
-                this.replaceText(realStart, realEnd, item.text);
-                this.completeArea.innerHTML = '';
-            })
-            this.completeArea.appendChild(div);
-        }
-    }
-
-    closeComplete() {
-        this.completeArea.innerHTML = '';
+        this.events.afterChange.emit();
     }
 
     replaceText(start: number, end: number, text: string) {

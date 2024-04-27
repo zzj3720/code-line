@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import {CodeLine} from "code-line";
-import {onMounted, ref} from "vue";
-import Parser from "web-tree-sitter";
+import {CodeLine, Selection, widgetPresets} from "code-line";
+import {onMounted, onUnmounted, ref} from "vue";
+import Parser, {SyntaxNode} from "web-tree-sitter";
 import testLangUrl from './tree-sitter-test.wasm?url';
 
 const editor = ref<HTMLElement | null>(null);
@@ -22,6 +22,16 @@ const functionList = [
   'normalize',
   'slice'
 ]
+const buildComplete = (options: string[], selection: Selection, node: SyntaxNode) => {
+  return options.filter(filter(node.text)).map(v => ({
+    text: v,
+    offsetStart: node.startIndex - selection.start,
+    offsetEnd: node.endIndex - selection.end,
+  }));
+}
+const filter = (text: string) => (s: string) => {
+  return s.startsWith(text) && text != s
+}
 onMounted(async () => {
   if (editor.value) {
     await Parser.init()
@@ -29,27 +39,33 @@ onMounted(async () => {
       source: '',
       language: await Parser.Language.load(testLangUrl),
       highlight: `
+      (binary_expression operator:_ @operator)
       (number) @number
       (string) @string
       (boolean) @boolean
       (dot_expression "." @operator)
       (identifier) @keyword
       `,
-      onCreate(selection, node) {
-        if (node.type === 'identifier') {
-          return [...variableList, ...functionList].filter(v => v.startsWith(node.text)).map(v => ({
-            text: v,
-            offsetStart: node.startIndex - selection.start,
-            offsetEnd: node.endIndex - selection.end,
-          }));
-        }
-        if (node.type === '.') {
-          return functionList.map(v => ({text: v}))
-        }
-        return []
-      },
+      widgets: [
+        new widgetPresets.CodeErrorWidget(),
+        new widgetPresets.CodeCompleteWidget({
+          matches: [
+            {
+              query: '(dot_expression function:(_) @function)',
+              run: (selection, name, node) => buildComplete(functionList, selection, node)
+            },
+            {
+              query: '(expression) @exp',
+              run: (selection, name, node) => buildComplete([...variableList, ...functionList], selection, node)
+            },
+          ],
+        })
+      ]
     })
   }
+})
+onUnmounted(() => {
+  line.dispose()
 })
 </script>
 <template>
