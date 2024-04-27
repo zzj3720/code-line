@@ -11,6 +11,11 @@ const variableList = [
   'column2',
   'column3',
   'column4',
+  'JSON',
+  'true',
+  'false',
+  'window',
+  'console',
 ]
 const functionList = [
   'max',
@@ -20,7 +25,8 @@ const functionList = [
   'pow',
   'length',
   'normalize',
-  'slice'
+  'slice',
+  'parse',
 ]
 const buildComplete = (options: string[], selection: Selection, node: SyntaxNode) => {
   return options.filter(filter(node.text)).map(v => ({
