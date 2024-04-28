@@ -64,6 +64,11 @@ export class CodeCompleteWidget extends Widget {
                 e.stopPropagation();
                 (this.completeArea.children[this._selectIndex] as HTMLDivElement)?.click()
             }
+            if(e.key==='Escape'){
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeComplete();
+            }
 
         };
         this.codeLine.root.addEventListener('keydown', listener)
